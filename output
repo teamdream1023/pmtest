@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Star WebPRNT 輪購中介站</title>
+  <!-- 載入 Star WebPRNT JavaScript SDK -->
+  <script type="text/javascript" src="js/StarWebPrintBuilder.js"></script>
+  <script type="text/javascript" src="js/StarWebPrintTrader.js"></script>
+</head>
+<body style="font-family: sans-serif; padding: 20px;">
+  <h2>中介</h2>
+  <p>狀態：<span id="status" style="color: green; font-weight: bold;">監聽中...</span></p>
+  <div id="log" style="background: #f0f0f0; padding: 10px; height: 300px; overflow-y: scroll; font-size: 12px;"></div>
+
+  <script>
+    // === 設定區 ===
+    const GAS_WEB_APP_URL = "你的_GAS_WEB_APP_網址"; 
+    const POLL_INTERVAL = 3000; // 每 3 秒檢查一次
+
+    function log(msg) {
+      const logDiv = document.getElementById("log");
+      logDiv.innerHTML += `[${new Date().toLocaleTimeString()}] ${msg}<br>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    // 將文字轉為 Star 數據格式並傳送至印表機
+    function printText(content, onComplete) {
+      try {
+        var builder = new StarWebPrintBuilder();
+        var request = "";
+
+        request += builder.createInitializationElement();
+        request += builder.createAlignmentElement({position: "center"});
+        request += builder.createTextElement({data: "==============================\n"});
+        request += builder.createAlignmentElement({position: "left"});
+        request += builder.createTextElement({data: content + "\n"});
+        request += builder.createAlignmentElement({position: "center"});
+        request += builder.createTextElement({data: "==============================\n"});
+        request += builder.createCutPaperElement({type: "partial"});
+
+        // 建立 Trader 連線 (預設走 WebPRNT 本地連接埠)
+        var trader = new StarWebPrintTrader({url: 'http://localhost:8001/StarWebPRNT/SendMessage'});
+
+        trader.onReceive = function (response) {
+          if (response.traderSuccess) {
+            log("✅ 成功！");
+            onComplete(true);
+          } else {
+            log("❌ 失敗：" + response.traderCode);
+            onComplete(false);
+          }
+        };
+
+        trader.onError = function (response) {
+          log("❌ 通訊錯誤 (請檢查手機與印表機連線/藍牙設定)");
+          onComplete(false);
+        };
+
+        trader.sendMessage({request: request});
+      } catch (e) {
+        log("❌ 轉換發送發生例外：" + e.message);
+        onComplete(false);
+      }
+    }
+
+    // 輪詢 GAS PrintQueue
+    async function checkQueue() {
+      try {
+        let res = await fetch(GAS_WEB_APP_URL);
+        let tasks = await res.json();
+
+        if (tasks && tasks.length > 0) {
+          for (let task of tasks) {
+            log(`發現新訂單 (Row ${task.rowIndex})，準備列印...`);
+            
+            printText(task.content, async function(success) {
+              if (success) {
+                // 更新狀態為 DONE
+                await fetch(`${GAS_WEB_APP_URL}?action=done&rowIndex=${task.rowIndex}`);
+                log(`Row ${task.rowIndex} 狀態已更新為 DONE`);
+              }
+            });
+          }
+        }
+      } catch (err) {
+        log("⚠️ 讀取 GAS 佇列失敗：" + err.message);
+      }
+    }
+
+    // 啟動定時輪詢
+    setInterval(checkQueue, POLL_INTERVAL);
+    log("🚀 中介服務已啟動");
+  </script>
+</body>
+</html>
